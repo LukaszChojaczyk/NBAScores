@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111418">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>NBA Scores</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%23e8742c'/%3E%3Cpath d='M4 50h92M50 4v92M18 18c20 20 20 44 0 64M82 18c-20 20-20 44 0 64' stroke='%23111' stroke-width='5' fill='none'/%3E%3C/svg%3E">
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#15181c; --muted:#6b7280; --line:#e5e7eb; --accent:#e8742c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#1a1d23; --text:#eceef1; --muted:#9aa1ab; --line:#2a2e36; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { position:sticky; top:0; z-index:1; display:flex; align-items:center; justify-content:space-between;
+           padding:14px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:20px; }
+  button { font:inherit; border:0; border-radius:10px; padding:8px 14px; background:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; }
+  main { padding:12px; max-width:640px; margin:0 auto; }
+  h2 { font-size:15px; margin:18px 4px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .score { display:flex; justify-content:space-between; align-items:center; font-size:17px; padding:2px 0; }
+  .score b { font-size:22px; }
+  .win { font-weight:700; }
+  .status { font-size:12px; color:var(--muted); margin-top:2px; }
+  .live { color:#d93636; font-weight:600; }
+  hr { border:0; border-top:1px solid var(--line); margin:10px 0; }
+  .team { font-size:13px; font-weight:700; margin:8px 0 2px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { font-size:11px; color:var(--muted); font-weight:500; text-align:right; padding:2px 3px; }
+  td { text-align:right; padding:3px; white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; width:100%; max-width:0; overflow:hidden; text-overflow:ellipsis; }
+  td.pts { font-weight:700; }
+  .msg { text-align:center; color:var(--muted); padding:40px 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏀 NBA Scores</h1>
+  <button id="refresh">Refresh</button>
+</header>
+<main id="app"><p class="msg">Loading…</p></main>
+
+<script>
+const BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba";
+const DAYS_BACK = 2; // today + previous 2 days (US Eastern dates); games not yet started are hidden
+
+const app = document.getElementById("app");
+const btn = document.getElementById("refresh");
+
+function easternDate(offsetDays) {
+  const d = new Date(Date.now() - offsetDays * 86400000);
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(d).map(x => [x.type, x.value]));
+  return `${p.year}${p.month}${p.day}`;
+}
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+function topPlayers(summary) {
+  const out = {};
+  for (const t of summary?.boxscore?.players ?? []) {
+    const block = t.statistics?.[0];
+    if (!block) continue;
+    const labels = (block.labels ?? block.names ?? []).map(s => s.toUpperCase());
+    const i = l => labels.indexOf(l);
+    const [iMin, iPts, iReb, iAst, iFg, i3] = ["MIN","PTS","REB","AST","FG","3PT"].map(i);
+    out[t.team.id] = (block.athletes ?? [])
+      .filter(a => !a.didNotPlay && a.stats?.length)
+      .map(a => ({
+        name: a.athlete?.shortName || a.athlete?.displayName,
+        min: a.stats[iMin] ?? "-", pts: parseInt(a.stats[iPts]) || 0,
+        reb: a.stats[iReb] ?? "-", ast: a.stats[iAst] ?? "-",
+        fg: a.stats[iFg] ?? "-", three: a.stats[i3] ?? "-",
+      }))
+      .sort((a, b) => b.pts - a.pts)
+      .slice(0, 3);
+  }
+  return out;
+}
+
+async function loadGame(ev, dateKey) {
+  const comp = ev.competitions[0];
+  let leaders = {};
+  try { leaders = topPlayers(await getJSON(`${BASE}/summary?event=${ev.id}`)); } catch (e) {}
+  const team = c => ({
+    id: c.team.id, name: c.team.displayName, abbr: c.team.abbreviation,
+    score: c.score ?? "-", players: leaders[c.team.id] ?? [],
+  });
+  return {
+    dateKey, id: ev.id,
+    status: ev.status.type.shortDetail, state: ev.status.type.state,
+    away: team(comp.competitors.find(c => c.homeAway === "away")),
+    home: team(comp.competitors.find(c => c.homeAway === "home")),
+  };
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+function renderTeamTable(t) {
+  if (!t.players.length) return `<div class="team">${esc(t.abbr)}</div><div class="status">Box score not available yet</div>`;
+  return `<div class="team">${esc(t.abbr)} top 3</div>
+  <table><tr><th>Player</th><th>PTS</th><th>REB</th><th>AST</th><th>FG</th><th>3PT</th><th>MIN</th></tr>
+  ${t.players.map(p => `<tr><td>${esc(p.name)}</td><td class="pts">${p.pts}</td><td>${esc(p.reb)}</td><td>${esc(p.ast)}</td><td>${esc(p.fg)}</td><td>${esc(p.three)}</td><td>${esc(p.min)}</td></tr>`).join("")}
+  </table>`;
+}
+
+function renderGame(g) {
+  const a = +g.away.score || 0, h = +g.home.score || 0;
+  return `<div class="card">
+    <div class="score ${a > h ? "win" : ""}"><span>${esc(g.away.name)}</span><b>${esc(g.away.score)}</b></div>
+    <div class="score ${h > a ? "win" : ""}"><span>${esc(g.home.name)}</span><b>${esc(g.home.score)}</b></div>
+    <div class="status ${g.state === "in" ? "live" : ""}">${g.state === "in" ? "● LIVE · " : ""}${esc(g.status)}</div>
+    <hr>${renderTeamTable(g.away)}${renderTeamTable(g.home)}
+  </div>`;
+}
+
+function dayLabel(key) {
+  const d = new Date(Date.UTC(+key.slice(0,4), +key.slice(4,6) - 1, +key.slice(6,8), 12));
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" }) + " (US)";
+}
+
+async function load() {
+  btn.disabled = true;
+  app.innerHTML = `<p class="msg">Loading…</p>`;
+  try {
+    const keys = Array.from({ length: DAYS_BACK + 1 }, (_, i) => easternDate(i));
+    const boards = await Promise.all(keys.map(k => getJSON(`${BASE}/scoreboard?dates=${k}`).then(j => ({ k, events: j.events ?? [] }))));
+    const games = await Promise.all(boards.flatMap(b =>
+      b.events.filter(e => e.status?.type?.state !== "pre").map(e => loadGame(e, b.k))));
+    if (!games.length) { app.innerHTML = `<p class="msg">No games in the last ${DAYS_BACK} days.</p>`; return; }
+    app.innerHTML = keys
+      .map(k => ({ k, list: games.filter(g => g.dateKey === k) }))
+      .filter(d => d.list.length)
+      .map(d => `<h2>${dayLabel(d.k)}</h2>${d.list.map(renderGame).join("")}`)
+      .join("");
+  } catch (e) {
+    app.innerHTML = `<p class="msg">Couldn't load scores (${esc(e.message)}).<br>Check your connection and tap Refresh.</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+btn.addEventListener("click", load);
+load();
+</script>
+</body>
+</html>
